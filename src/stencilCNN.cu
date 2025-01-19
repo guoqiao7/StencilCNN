@@ -20,7 +20,7 @@ using namespace nvcuda;
 #define IDX(x, y, ldm) ((x) * (ldm) + (y))
 #define WARP_PER_BLOCK 8
 #define MMA_NUM 13
-#define CHANNELS 1
+#define CHANNELS 3
 
 const int stencil_size = 7;
 const int stencil_radius = stencil_size / 2;
@@ -69,14 +69,14 @@ __global__ void stencilCNN(const double* __restrict__ in, double* __restrict__ o
 #pragma unroll
             for (int compute_idx = 0; compute_idx < MMA_NUM; compute_idx++) {
                 wmma::load_matrix_sync(in_frag, sharedmem[0] + IDX(0, col + compute_idx * 4, SM_SIZE_COL), SM_SIZE_COL);
-                wmma::mma_sync(acc_frag, in_frag, param_frag[2 * c][compute_idx], bias_frag);
+                wmma::mma_sync(bias_frag, in_frag, param_frag[2 * c][compute_idx], bias_frag);
             }
 #pragma unroll
             for (int compute_idx = 0; compute_idx < MMA_NUM; compute_idx++) {
                 wmma::load_matrix_sync(in_frag, sharedmem[1] + IDX(0, col + compute_idx * 4, SM_SIZE_COL), SM_SIZE_COL);
-                wmma::mma_sync(acc_frag, in_frag, param_frag[2 * c + 1][compute_idx], bias_frag);
+                wmma::mma_sync(bias_frag, in_frag, param_frag[2 * c + 1][compute_idx], bias_frag);
             } 
-            wmma::store_matrix_sync(out + begin + IDX(HALO + col / 7, HALO, ldm), acc_frag, TENSOR_CORE_M, wmma::mem_row_major);
+            wmma::store_matrix_sync(out + begin + IDX(HALO + col / 7, HALO, ldm), bias_frag, TENSOR_CORE_M, wmma::mem_row_major);
         }
     }
 }
@@ -140,10 +140,15 @@ void stencil_convolution(const double** input, double* output, const double para
             }
         }
     }
-    CHECK(cudaMemcpyToSymbol(param_matrix_d_0, param_matrix_h[0], 2 * 8 * 52 * sizeof(double)));
-    CHECK(cudaMemcpyToSymbol(param_matrix_d_1, param_matrix_h[2], 2 * 8 * 52 * sizeof(double)));
-    CHECK(cudaMemcpyToSymbol(param_matrix_d_1, param_matrix_h[4], 2 * 8 * 52 * sizeof(double)));
-    
+    size_t offset_bytes = 0;
+    CHECK(cudaMemcpyToSymbol(param_matrix_d_0, param_matrix_h[0], 8 * 52 * sizeof(double), offset_bytes, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpyToSymbol(param_matrix_d_1, param_matrix_h[2], 8 * 52 * sizeof(double), offset_bytes, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpyToSymbol(param_matrix_d_2, param_matrix_h[4], 8 * 52 * sizeof(double), offset_bytes, cudaMemcpyHostToDevice));
+    offset_bytes += 416 * sizeof(double);
+    CHECK(cudaMemcpyToSymbol(param_matrix_d_0, param_matrix_h[1], 8 * 52 * sizeof(double), offset_bytes, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpyToSymbol(param_matrix_d_1, param_matrix_h[3], 8 * 52 * sizeof(double), offset_bytes, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpyToSymbol(param_matrix_d_2, param_matrix_h[5], 8 * 52 * sizeof(double), offset_bytes, cudaMemcpyHostToDevice));
+
     const size_t array_size = rows * cols * sizeof(double);
 
     double *in_d = nullptr;
@@ -152,7 +157,9 @@ void stencil_convolution(const double** input, double* output, const double para
     CHECK(cudaMalloc(&out_d, array_size));
     CHECK(cudaMemset(in_d, 0, CHANNELS * array_size));
     CHECK(cudaMemset(out_d, 0, array_size));
-    CHECK(cudaMemcpy(in_d, input, CHANNELS * array_size, cudaMemcpyHostToDevice));
+    for (int c = 0; c < CHANNELS; c++){
+        CHECK(cudaMemcpy(in_d + c * rows * cols, input[c], array_size, cudaMemcpyHostToDevice));
+    }
 
     dim3 grid((rows + BLOCK_SIZE_ROW - 1) / BLOCK_SIZE_ROW, (cols + BLOCK_SIZE_COL - 1) / BLOCK_SIZE_COL);
     // dim3 grid(1, 1);
@@ -217,101 +224,101 @@ void cpu_stencil(const double** input, double** output, const double params[CHAN
     }
 }
 
+// void cuDNN(double** input, const double params[CHANNELS][UNIT_LENGTH * UNIT_LENGTH], double* output, int rows, int cols){
+//     int H = rows - 2*HALO;
+//     int W = cols - 2*HALO;
 
-void cuDNN(double** input, const double params[CHANNELS][UNIT_LENGTH * UNIT_LENGTH], double* output, int rows, int cols){
-    int H = rows - 2*HALO;
-    int W = cols - 2*HALO;
+//     // Allocate memory on GPU
+//     double *input_d, *kernel_d, *output_d;
+//     cudaMalloc(&input_d, CHANNELS * rows * cols * sizeof(double));
+//     cudaMalloc(&kernel_d, CHANNELS * UNIT_LENGTH * UNIT_LENGTH * sizeof(double));
+//     cudaMalloc(&output_d, H * W * sizeof(double));
 
-    // Allocate memory on GPU
-    double *input_d, *kernel_d, *output_d;
-    cudaMalloc(&input_d, CHANNELS * rows * cols * sizeof(double));
-    cudaMalloc(&kernel_d, CHANNELS * UNIT_LENGTH * UNIT_LENGTH * sizeof(double));
-    cudaMalloc(&output_d, H * W * sizeof(double));
-
-    for (int c = 0; c < CHANNELS; ++c){
-        cudaMemcpy(input_d + c * rows * cols, input[c], rows * cols * sizeof(double), cudaMemcpyHostToDevice);
-        cudaMemcpy(kernel_d + c * UNIT_LENGTH * UNIT_LENGTH, params[c], UNIT_LENGTH * UNIT_LENGTH *sizeof(double), cudaMemcpyHostToDevice);
+//     for (int c = 0; c < CHANNELS; ++c){
+//         cudaMemcpy(input_d + c * rows * cols, input[c], rows * cols * sizeof(double), cudaMemcpyHostToDevice);
+//         cudaMemcpy(kernel_d + c * UNIT_LENGTH * UNIT_LENGTH, params[c], UNIT_LENGTH * UNIT_LENGTH *sizeof(double), cudaMemcpyHostToDevice);
         
-    }
+//     }
 
-    // Initialize cuDNN
-    cudnnHandle_t cudnn;
-    CHECK_CUDNN(cudnnCreate(&cudnn));
+//     // Initialize cuDNN
+//     cudnnHandle_t cudnn;
+//     CHECK_CUDNN(cudnnCreate(&cudnn));
 
-    cudnnTensorDescriptor_t input_desc, output_desc;
-    cudnnFilterDescriptor_t kernel_desc;
-    cudnnConvolutionDescriptor_t conv_desc;
+//     cudnnTensorDescriptor_t input_desc, output_desc;
+//     cudnnFilterDescriptor_t kernel_desc;
+//     cudnnConvolutionDescriptor_t conv_desc;
 
-    CHECK_CUDNN(cudnnCreateTensorDescriptor(&input_desc));
-    CHECK_CUDNN(cudnnSetTensor4dDescriptor(input_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, 1, CHANNELS, rows , cols));
+//     CHECK_CUDNN(cudnnCreateTensorDescriptor(&input_desc));
+//     CHECK_CUDNN(cudnnSetTensor4dDescriptor(input_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, 1, CHANNELS, rows , cols));
 
-    CHECK_CUDNN(cudnnCreateFilterDescriptor(&kernel_desc));
-    CHECK_CUDNN(cudnnSetFilter4dDescriptor(kernel_desc, CUDNN_DATA_DOUBLE, CUDNN_TENSOR_NCHW, 1, CHANNELS, UNIT_LENGTH, UNIT_LENGTH));
+//     CHECK_CUDNN(cudnnCreateFilterDescriptor(&kernel_desc));
+//     CHECK_CUDNN(cudnnSetFilter4dDescriptor(kernel_desc, CUDNN_DATA_DOUBLE, CUDNN_TENSOR_NCHW, 1, CHANNELS, UNIT_LENGTH, UNIT_LENGTH));
 
-    CHECK_CUDNN(cudnnCreateTensorDescriptor(&output_desc));
-    CHECK_CUDNN(cudnnSetTensor4dDescriptor(output_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, 1, 1, H, W));
+//     CHECK_CUDNN(cudnnCreateTensorDescriptor(&output_desc));
+//     CHECK_CUDNN(cudnnSetTensor4dDescriptor(output_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, 1, 1, H, W));
 
-    CHECK_CUDNN(cudnnCreateConvolutionDescriptor(&conv_desc));
-    CHECK_CUDNN(cudnnSetConvolution2dDescriptor(conv_desc, 
-                                                0, 0, 
-                                                1, 1, 
-                                                1, 1, 
-                                                CUDNN_CROSS_CORRELATION, 
-                                                CUDNN_DATA_DOUBLE));
+//     CHECK_CUDNN(cudnnCreateConvolutionDescriptor(&conv_desc));
+//     CHECK_CUDNN(cudnnSetConvolution2dDescriptor(conv_desc, 
+//                                                 0, 0, 
+//                                                 1, 1, 
+//                                                 1, 1, 
+//                                                 CUDNN_CROSS_CORRELATION, 
+//                                                 CUDNN_DATA_DOUBLE));
 
-    // Select algorithm
-    int returned_alog_count;
-    cudnnConvolutionFwdAlgoPerf_t algoPerf;
-    CHECK_CUDNN(cudnnGetConvolutionForwardAlgorithm_v7(cudnn,
-                                                    input_desc, kernel_desc, conv_desc, output_desc,
-                                                    1,
-                                                    &returned_alog_count,
-                                                    &algoPerf))
-    cudnnConvolutionFwdAlgo_t algo = algoPerf.algo;
+//     // Select algorithm
+//     int returned_alog_count;
+//     cudnnConvolutionFwdAlgoPerf_t algoPerf;
+//     CHECK_CUDNN(cudnnGetConvolutionForwardAlgorithm_v7(cudnn,
+//                                                     input_desc, kernel_desc, conv_desc, output_desc,
+//                                                     1,
+//                                                     &returned_alog_count,
+//                                                     &algoPerf))
+//     cudnnConvolutionFwdAlgo_t algo = algoPerf.algo;
 
-    // CHECK_CUDNN(cudnnFindConvolutionForwardAlgorithm(cudnn,
-    //                                                 input_desc, kernel_desc, conv_desc, output_desc,
-    //                                                 10, 
-    //                                                 &returned_alog_count, 
-    //                                                 perf_res));
-    // cudnnConvolutionFwdAlgo_t algo = perf_res[0].algo;
+//     // CHECK_CUDNN(cudnnFindConvolutionForwardAlgorithm(cudnn,
+//     //                                                 input_desc, kernel_desc, conv_desc, output_desc,
+//     //                                                 10, 
+//     //                                                 &returned_alog_count, 
+//     //                                                 perf_res));
+//     // cudnnConvolutionFwdAlgo_t algo = perf_res[0].algo;
 
-    // cudnnConvolutionFwdAlgo_t algo;
-    // CHECK_CUDNN(cudnnGetConvolutionForwardAlgorithm)(cudnn,
-    //                                                 input_desc, kernel_desc, conv_desc, output_desc,
-    //                                                 CUDNN_CONVOLUTION_FWD_PREFER_FASTEST,
-    //                                                 0,
-    //                                                 &algo);
+//     // cudnnConvolutionFwdAlgo_t algo;
+//     // CHECK_CUDNN(cudnnGetConvolutionForwardAlgorithm)(cudnn,
+//     //                                                 input_desc, kernel_desc, conv_desc, output_desc,
+//     //                                                 CUDNN_CONVOLUTION_FWD_PREFER_FASTEST,
+//     //                                                 0,
+//     //                                                 &algo);
 
-    // Workspace size
-    void *workspace = nullptr;
-    size_t workspace_size = 0;
-    CHECK_CUDNN(cudnnGetConvolutionForwardWorkspaceSize(cudnn,
-                                                        input_desc, kernel_desc, conv_desc, output_desc,
-                                                        algo, &workspace_size));
-    cudaMalloc(&workspace, workspace_size);
+//     // Workspace size
+//     void *workspace = nullptr;
+//     size_t workspace_size = 0;
+//     CHECK_CUDNN(cudnnGetConvolutionForwardWorkspaceSize(cudnn,
+//                                                         input_desc, kernel_desc, conv_desc, output_desc,
+//                                                         algo, &workspace_size));
+//     cudaMalloc(&workspace, workspace_size);
     
-    // Perform convolution
-    const double alpha = 1.0f, beta = 0.0f;
-    CHECK_CUDNN(cudnnConvolutionForward(cudnn, &alpha,
-                                        input_desc, input_d, kernel_desc, kernel_d, 
-                                        conv_desc, algo, 
-                                        workspace, workspace_size,
-                                        &beta, 
-                                        output_desc, output_d));
+//     // Perform convolution
+//     const double alpha = 1.0f, beta = 0.0f;
+//     CHECK_CUDNN(cudnnConvolutionForward(cudnn, &alpha,
+//                                         input_desc, input_d, kernel_desc, kernel_d, 
+//                                         conv_desc, algo, 
+//                                         workspace, workspace_size,
+//                                         &beta, 
+//                                         output_desc, output_d));
     
-    cudaMemcpy(output, output_d, H * W * sizeof(double), cudaMemcpyDeviceToHost);
+//     cudaMemcpy(output, output_d, H * W * sizeof(double), cudaMemcpyDeviceToHost);
 
-    cudaFree(input_d);
-    cudaFree(kernel_d);
-    cudaFree(output_d);
-    cudaFree(workspace);
-    cudnnDestroyTensorDescriptor(input_desc);
-    cudnnDestroyTensorDescriptor(output_desc);
-    cudnnDestroyFilterDescriptor(kernel_desc);
-    cudnnDestroyConvolutionDescriptor(conv_desc);
-    cudnnDestroy(cudnn);
-}
+//     cudaFree(input_d);
+//     cudaFree(kernel_d);
+//     cudaFree(output_d);
+//     cudaFree(workspace);
+//     cudnnDestroyTensorDescriptor(input_desc);
+//     cudnnDestroyTensorDescriptor(output_desc);
+//     cudnnDestroyFilterDescriptor(kernel_desc);
+//     cudnnDestroyConvolutionDescriptor(conv_desc);
+//     cudnnDestroy(cudnn);
+// }
+
 
 int main(int argc, char* argv[]) {
     int H = 0, W = 0;
@@ -377,6 +384,7 @@ int main(int argc, char* argv[]) {
 
     initialData(input, CHANNELS, rows * cols);
 
+    
     // -------------------------------------------CPU----------------------------------------------
     std::chrono::steady_clock::time_point cpu_begin = std::chrono::steady_clock::now();
     cpu_stencil((const double**)input, output_cpu, params, rows, cols);
@@ -403,31 +411,31 @@ int main(int argc, char* argv[]) {
     //     output_gpu[0][i] += output_gpu[2][i];
     // }
 
-    // -----------------------------------------CUDNN-----------------------------------------------
-    std::vector<double> output_cudnn(H * W);
-    std::chrono::steady_clock::time_point cudnn_warm_begin = std::chrono::steady_clock::now();
-    cuDNN(input, params, output_cudnn.data(), rows, cols);
-    std::chrono::steady_clock::time_point cudnn_warm_end = std::chrono::steady_clock::now();
 
-    std::chrono::steady_clock::time_point cudnn_begin = std::chrono::steady_clock::now();
+    // -----------------------------------------CUDNN-----------------------------------------------
     // std::vector<double> output_cudnn(H * W);
-    cuDNN(input, params, output_cudnn.data(), rows, cols);
-    std::chrono::steady_clock::time_point cudnn_end = std::chrono::steady_clock::now();
+    // std::chrono::steady_clock::time_point cudnn_warm_begin = std::chrono::steady_clock::now();
+    // cuDNN(input, params, output_cudnn.data(), rows, cols);
+    // std::chrono::steady_clock::time_point cudnn_warm_end = std::chrono::steady_clock::now();
+
+    // std::chrono::steady_clock::time_point cudnn_begin = std::chrono::steady_clock::now();
+    // // std::vector<double> output_cudnn(H * W);
+    // cuDNN(input, params, output_cudnn.data(), rows, cols);
+    // std::chrono::steady_clock::time_point cudnn_end = std::chrono::steady_clock::now();
 
     // ----------------------------------------------------------------------------------------------
     float CPU_TIME = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_begin).count()/1000.0f;
     float GPU_TIME = std::chrono::duration_cast<std::chrono::microseconds>(gpu_end - gpu_begin).count()/1000.0f;
     float WARMUP_TIME = std::chrono::duration_cast<std::chrono::microseconds>(warmup_end - warmup_begin).count()/1000.0f;
-    float CUDNN_TIME = std::chrono::duration_cast<std::chrono::microseconds>(cudnn_end - cudnn_begin).count()/1000.0f;
-    float CUDNN_WARM = std::chrono::duration_cast<std::chrono::microseconds>(cudnn_warm_end - cudnn_warm_begin).count()/1000.0f;
-
+    // float CUDNN_TIME = std::chrono::duration_cast<std::chrono::microseconds>(cudnn_end - cudnn_begin).count()/1000.0f;
+    // float CUDNN_WARM = std::chrono::duration_cast<std::chrono::microseconds>(cudnn_warm_end - cudnn_warm_begin).count()/1000.0f;
 
     double* cropped_cpu = cropMatrix(output_cpu[0], rows, cols);
     double* cropped_gpu = cropMatrix(output_gpu, rows, cols);
 
     printMatrix("output_cpu", cropped_cpu, H, W, CPU_TIME);
     printMatrix("output_gpu", cropped_gpu, H, W, GPU_TIME, WARMUP_TIME);
-    printMatrix("output_cudnn", output_cudnn.data(), H, W, CUDNN_TIME, CUDNN_WARM);
+    // printMatrix("output_cudnn", output_cudnn.data(), H, W, CUDNN_TIME, CUDNN_WARM);
 
 #ifdef SAVE_FILE
     save_to_txt(cropped_cpu, H, W, "cpu.txt");
