@@ -5,6 +5,9 @@
 #define CHANNELS 3
 #define UNIT_LENGTH 7
 #define IDX(x, y, ldm) ((x) * (ldm) + (y))
+#define ABS(x, y) (((x) > (y)) ? ((x) - (y)) : ((y) - (x)))
+
+const double tolerance = 1e-7;
 
 #define CHECK(call)\
 {\
@@ -67,7 +70,7 @@ void printMatrix(const char* name, double *M, int rows, const int cols, float ti
         printf("Matrix<%s>: %fms     warmup_time:%f \n", name, time, warmup_time);
         for(int i = 0; i < 7; i++){
             for(int j = 0; j < 7; j++){
-                printf("%.2f ", M[i * cols + j]);
+                printf("%06.2f ", M[i * cols + j]);
             }
             printf(".......");
             for(int j = cols - 7; j < cols; j++){
@@ -84,7 +87,7 @@ void printMatrix(const char* name, double *M, int rows, const int cols, float ti
             }
             printf(".......");
             for(int j = cols - 7; j < cols; j++){
-                printf("%.2f ", M[i * cols + j]);
+                printf("%06.2f ", M[i * cols + j]);
             }
             printf("\n");
         }
@@ -173,5 +176,17 @@ void param_time_fusion(double param_after_fusion[][UNIT_LENGTH * UNIT_LENGTH], d
         param_after_fusion[c][46] = (3 * param[6] * param[8] * param[8] + 3 * param[7] * param[7] * param[8]);
         param_after_fusion[c][47] = 3 * param[7] * param[8] * param[8];
         param_after_fusion[c][48] = param[8] * param[8] * param[8];
+    }
+}
+
+void checkResult(double *res_A, double *res_B, int rows, int cols){
+    printf("\nChecking.....\n");
+    for(int i = 1; i < rows; i++){
+        for (int j = 0; j < cols; j++){
+            if (ABS(res_A[i], res_B[i]) > tolerance){
+                printf("row = %d, col = %d, res_A = %06.2f, res_B = %06.2f\n", 
+                i, j, res_A[IDX(i,j,cols)], res_B[IDX(i, j, cols)]);
+            }
+        }
     }
 }
