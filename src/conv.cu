@@ -409,7 +409,7 @@ int main(int argc, char* argv[]) {
     // printMatrix("output_gpu", cropped_gpu, H, W, GPU_TIME, WARMUP_TIME);
     // printMatrix("output_cudnn", output_cudnn.data(), H, W, CUDNN_TIME, CUDNN_WARM);
 
-    checkResult(cropped_gpu, output_cudnn.data(), H, W);
+    checkResult(cropped_gpu, output_cudnn.data(), H, W, "GPU", "cuDNN", GPU_TIME, WARMUP_TIME, CUDNN_TIME, CUDNN_WARM);
 
 #ifdef SAVE_FILE
     save_to_txt(cropped_cpu, H, W, "cpu.txt");

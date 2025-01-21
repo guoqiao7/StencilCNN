@@ -179,7 +179,7 @@ void param_time_fusion(double param_after_fusion[][UNIT_LENGTH * UNIT_LENGTH], d
     }
 }
 
-void checkResult(double *res_A, double *res_B, int rows, int cols){
+void checkResult(double *res_A, double *res_B, int rows, int cols, const char *name_A, const char *name_B, float time_A, float warm_A, float time_B, float warm_B){
     printf("\nChecking.....\n");
     for(int i = 1; i < rows; i++){
         for (int j = 0; j < cols; j++){
@@ -189,4 +189,6 @@ void checkResult(double *res_A, double *res_B, int rows, int cols){
             }
         }
     }
+    printf("Matrix<%s>: %fms     warmup_time:%f \n", name_A, time_A, warm_A);
+    printf("Matrix<%s>: %fms     warmup_time:%f \n", name_B, time_B, warm_B);
 }
