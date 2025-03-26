@@ -370,9 +370,9 @@ int main(int argc, char* argv[]) {
     initialData(input, CHANNELS, rows * cols);
 
     // -------------------------------------------CPU----------------------------------------------
-    std::chrono::steady_clock::time_point cpu_begin = std::chrono::steady_clock::now();
-    cpu_stencil((const double**)input, output_cpu, params, rows, cols);
-    std::chrono::steady_clock::time_point cpu_end = std::chrono::steady_clock::now();
+    // std::chrono::steady_clock::time_point cpu_begin = std::chrono::steady_clock::now();
+    // cpu_stencil((const double**)input, output_cpu, params, rows, cols);
+    // std::chrono::steady_clock::time_point cpu_end = std::chrono::steady_clock::now();
 
     // -------------------------------------------GPU----------------------------------------------
     std::chrono::steady_clock::time_point warmup_begin = std::chrono::steady_clock::now();
@@ -395,7 +395,7 @@ int main(int argc, char* argv[]) {
     std::chrono::steady_clock::time_point cudnn_end = std::chrono::steady_clock::now();
 
     // ----------------------------------------------------------------------------------------------
-    float CPU_TIME = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_begin).count()/1000.0f;
+    // float CPU_TIME = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_begin).count()/1000.0f;
     float GPU_TIME = std::chrono::duration_cast<std::chrono::microseconds>(gpu_end - gpu_begin).count()/1000.0f;
     float WARMUP_TIME = std::chrono::duration_cast<std::chrono::microseconds>(warmup_end - warmup_begin).count()/1000.0f;
     float CUDNN_TIME = std::chrono::duration_cast<std::chrono::microseconds>(cudnn_end - cudnn_begin).count()/1000.0f;
